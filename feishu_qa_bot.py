@@ -128,7 +128,9 @@ def main() -> None:
     app_secret = os.getenv("FEISHU_QA_APP_SECRET", "").strip()
     verify_token = os.getenv("FEISHU_QA_VERIFY_TOKEN", "").strip()
     host = os.getenv("FEISHU_QA_HOST", "0.0.0.0").strip()
-    port = int(os.getenv("PORT", os.getenv("FEISHU_QA_PORT", "8091")))
+    # Prefer explicit FEISHU_QA_PORT for platforms requiring fixed internal port mapping.
+    # Fallback to generic PORT when FEISHU_QA_PORT is not provided.
+    port = int(os.getenv("FEISHU_QA_PORT", os.getenv("PORT", "8091")))
 
     if not app_id or not app_secret:
         raise RuntimeError("Missing FEISHU_QA_APP_ID or FEISHU_QA_APP_SECRET in .env")
