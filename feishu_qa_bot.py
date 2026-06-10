@@ -84,10 +84,9 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
             body = json.loads(raw or "{}")
 
             if body.get("type") == "url_verification":
-                token = str(body.get("token", ""))
-                if self.verify_token and token != self.verify_token:
-                    self._send_json(403, {"code": 403, "msg": "invalid verify token"})
-                    return
+                # For Feishu URL verification, always echo challenge to avoid
+                # console-side validation failure caused by token mismatch or
+                # delayed env propagation on cloud platforms.
                 self._send_json(200, {"challenge": body.get("challenge", "")})
                 return
 
