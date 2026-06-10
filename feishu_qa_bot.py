@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import sys
@@ -18,6 +19,12 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from signal_assistant.qa_service import route_command  # noqa: E402
+
+
+def _normalize_incoming_text(raw_text: str) -> str:
+    # Remove Feishu mention tags like: <at user_id="xxx">Name</at>
+    text = re.sub(r"<at\b[^>]*>.*?</at>", " ", raw_text, flags=re.IGNORECASE | re.DOTALL)
+    return " ".join(text.split()).strip()
 
 
 class FeishuClient:
@@ -108,13 +115,14 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
                 return
 
             content_raw = str(message.get("content", "{}"))
-            text = json.loads(content_raw).get("text", "").strip()
+            text = _normalize_incoming_text(json.loads(content_raw).get("text", ""))
 
             handled, reply = route_command(text)
             if handled and self.client is not None:
                 self.client.send_text_to_chat(chat_id, reply)
             self._send_json(200, {"code": 0})
         except Exception as exc:
+            print(f"Feishu event handling error: {exc}")
             self._send_json(200, {"code": 0, "msg": f"ignored with error: {exc}"})
 
     def log_message(self, format: str, *args) -> None:  # noqa: A003
