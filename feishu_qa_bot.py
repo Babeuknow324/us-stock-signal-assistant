@@ -21,6 +21,12 @@ if str(SRC) not in sys.path:
 from signal_assistant.qa_service import route_command  # noqa: E402
 
 
+def _parse_bool(value: str, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _normalize_incoming_text(raw_text: str) -> str:
     # Remove Feishu mention tags like: <at user_id="xxx">Name</at>
     text = re.sub(r"<at\b[^>]*>.*?</at>", " ", raw_text, flags=re.IGNORECASE | re.DOTALL)
@@ -71,6 +77,7 @@ class FeishuClient:
 class FeishuQAHandler(BaseHTTPRequestHandler):
     client: Optional[FeishuClient] = None
     verify_token: str = ""
+    debug_echo: bool = True
 
     def _send_json(self, status: int, body: dict) -> None:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -116,10 +123,20 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
 
             content_raw = str(message.get("content", "{}"))
             text = _normalize_incoming_text(json.loads(content_raw).get("text", ""))
+            print(f"Feishu inbound text: {text}")
 
             handled, reply = route_command(text)
-            if handled and self.client is not None:
-                self.client.send_text_to_chat(chat_id, reply)
+            if self.client is not None:
+                if handled:
+                    self.client.send_text_to_chat(chat_id, reply)
+                elif self.debug_echo:
+                    self.client.send_text_to_chat(
+                        chat_id,
+                        (
+                            f"已收到消息但未识别命令: {text or '(empty)'}\n"
+                            "请发送“帮助”查看可用命令。"
+                        ),
+                    )
             self._send_json(200, {"code": 0})
         except Exception as exc:
             print(f"Feishu event handling error: {exc}")
@@ -138,12 +155,14 @@ def main() -> None:
     # Prefer explicit FEISHU_QA_PORT for platforms requiring fixed internal port mapping.
     # Fallback to generic PORT when FEISHU_QA_PORT is not provided.
     port = int(os.getenv("FEISHU_QA_PORT", os.getenv("PORT", "8091")))
+    debug_echo = _parse_bool(os.getenv("FEISHU_QA_DEBUG_ECHO"), True)
 
     if not app_id or not app_secret:
         raise RuntimeError("Missing FEISHU_QA_APP_ID or FEISHU_QA_APP_SECRET in .env")
 
     FeishuQAHandler.client = FeishuClient(app_id=app_id, app_secret=app_secret)
     FeishuQAHandler.verify_token = verify_token
+    FeishuQAHandler.debug_echo = debug_echo
     server = HTTPServer((host, port), FeishuQAHandler)
     print(f"Feishu QA bot listening on http://{host}:{port}/feishu/events")
     server.serve_forever()
