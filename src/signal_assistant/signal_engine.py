@@ -184,8 +184,8 @@ class SignalEngine:
             volume_ratio=round(main.volume_ratio, 2),
             risk_level=risk_level,
             explanation=(
-                "Price is above MA20/MA50 on 15m, 1h trend is supportive, RSI recovered above threshold, "
-                "lower timeframes confirm, and volatility/relative-strength filters are acceptable."
+                "15m 价格站上 MA20/MA50，1h 趋势配合，RSI 回升突破阈值，"
+                "低周期有确认，且波动率/相对强弱过滤通过。"
             ),
             timestamp=datetime.now(timezone.utc).isoformat(),
             quality_score=quality_score,
@@ -247,8 +247,8 @@ class SignalEngine:
             volume_ratio=round(main.volume_ratio, 2),
             risk_level="medium",
             explanation=(
-                "Price broke above recent swing high with above-average volume, while trend and "
-                "lower-timeframe structure remain supportive, with breakout structure confirmed."
+                "价格突破近期摆动高点且量能放大，1h 趋势与低周期结构仍配合，"
+                "且突破结构（新鲜突破或回踩站稳）已确认。"
             ),
             timestamp=datetime.now(timezone.utc).isoformat(),
             quality_score=quality_score,
@@ -281,8 +281,8 @@ class SignalEngine:
             volume_ratio=round(main.volume_ratio, 2),
             risk_level="high",
             explanation=(
-                "Weakness is increasing: price lost MA20 and/or RSI deteriorated, with possible support break. "
-                "Review open risk and tighten plan."
+                "走弱信号增强：价格失守 MA20 和/或 RSI 继续走弱，并可能出现支撑失守。"
+                "建议检查持仓风险并收紧计划。"
             ),
             timestamp=datetime.now(timezone.utc).isoformat(),
             quality_score=quality_score,
@@ -324,8 +324,8 @@ class SignalEngine:
             volume_ratio=round(main.volume_ratio, 2),
             risk_level="high",
             explanation=(
-                "Conditions are improving but confirmation is incomplete across trend or lower timeframes. "
-                "Observe only; avoid rushing entries."
+                "结构有改善，但趋势或低周期确认仍不完整。"
+                "仅观察，不宜急于入场。"
             ),
             timestamp=datetime.now(timezone.utc).isoformat(),
             quality_score=quality_score,

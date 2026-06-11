@@ -45,8 +45,8 @@ class LLMAnalyzer:
                 {
                     "role": "system",
                     "content": (
-                        "You are a trading assistant for discretionary support. "
-                        "Do not output direct buy/sell orders. Keep language simple and practical."
+                        "你是辅助 discretionary 交易的技术分析助手。"
+                        "不要给出直接的买入/卖出指令。语言简洁实用，全部用中文回复。"
                     ),
                 },
                 {"role": "user", "content": prompt},
@@ -98,12 +98,12 @@ class LLMAnalyzer:
         payload = signal.to_dict()
         payload_text = json.dumps(payload, ensure_ascii=True)
         return (
-            "Analyze this technical signal and return concise JSON only with keys: "
-            "summary, bull_case, bear_case, key_levels (array), risk_note, evidence_strength, "
-            "failure_condition, next_check, confidence (0-100). "
-            "Keep each text field under 220 characters, in plain language for users weak at chart reading.\n"
-            "evidence_strength must be one of: strong, medium, weak.\n"
-            "failure_condition should clearly state what would make this setup invalid.\n"
-            "next_check should be one practical thing to monitor in next 1-3 bars.\n"
-            f"Signal JSON:\n{payload_text}"
+            "分析以下技术信号，仅返回简洁 JSON，字段包括: "
+            "summary, bull_case, bear_case, key_levels (数组), risk_note, evidence_strength, "
+            "failure_condition, next_check, confidence (0-100)。"
+            "所有文本字段用中文，每条不超过 220 字，面向不太会看图的普通用户。\n"
+            "evidence_strength 只能是: strong, medium, weak 之一。\n"
+            "failure_condition 需明确说明何种情况会使该结构失效。\n"
+            "next_check 应是接下来 1-3 根 K 线内值得观察的一件事。\n"
+            f"信号 JSON:\n{payload_text}"
         )

@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 
 from .config import Settings, load_settings
 from .llm_analyzer import LLMAnalyzer
+from .labels import label_evidence_strength, label_risk_level, label_signal_type
 from .longbridge_client import LongbridgeMarketDataClient
 from .signal_engine import SignalEngine, SignalResult
 
@@ -60,7 +61,7 @@ def get_snapshot(
                     f"总结: {llm_result.get('summary', '')}\n"
                     f"多头逻辑: {llm_result.get('bull_case', '')}\n"
                     f"空头逻辑: {llm_result.get('bear_case', '')}\n"
-                    f"证据强度: {llm_result.get('evidence_strength', 'medium')}\n"
+                    f"证据强度: {label_evidence_strength(llm_result.get('evidence_strength', 'medium'))}\n"
                     f"失效条件: {llm_result.get('failure_condition', '')}\n"
                     f"下一步观察: {llm_result.get('next_check', '')}\n"
                     f"置信度: {llm_result.get('confidence', 50)}/100"
@@ -94,10 +95,11 @@ def format_advice_reply(snapshot: QuerySnapshot) -> str:
     return (
         f"{snapshot.symbol}\n"
         f"当前价格: {snapshot.price:.2f}\n"
-        f"当前信号: {signal.signal_type} (Tier {signal.priority_tier}, 质量 {signal.quality_score}/100)\n"
+        f"当前信号: {label_signal_type(signal.signal_type)} "
+        f"({signal.priority_tier}级, 质量 {signal.quality_score}/100)\n"
         f"建议: {action}\n"
         f"关键位: 入场 {signal.entry_min}-{signal.entry_max} | 失效 {signal.invalidation} | 阻力 {signal.resistance}\n"
-        f"风控: {signal.risk_level} | ATR {signal.atr_pct}%"
+        f"风控: {label_risk_level(signal.risk_level)} | ATR {signal.atr_pct}%"
     )
 
 
@@ -107,7 +109,7 @@ def format_risk_reply(snapshot: QuerySnapshot) -> str:
     signal = snapshot.signal
     return (
         f"{snapshot.symbol}\n"
-        f"风险等级: {signal.risk_level}\n"
+        f"风险等级: {label_risk_level(signal.risk_level)}\n"
         f"失效位: {signal.invalidation}\n"
         f"当前价: {snapshot.price:.2f}\n"
         f"说明: {signal.explanation}"
@@ -121,7 +123,7 @@ def format_explain_reply(snapshot: QuerySnapshot) -> str:
         return f"{snapshot.symbol}\n{snapshot.llm_text}"
     return (
         f"{snapshot.symbol}\n"
-        f"当前信号: {snapshot.signal.signal_type}\n"
+        f"当前信号: {label_signal_type(snapshot.signal.signal_type)}\n"
         f"规则解释: {snapshot.signal.explanation}\n"
         "LLM 未启用或本次未返回分析。"
     )

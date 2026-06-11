@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .config import Settings, load_settings
+from .labels import label_signal_type
 from .longbridge_client import LongbridgeMarketDataClient
 from .llm_analyzer import LLMAnalyzer
 from .notifier import SignalNotifier
@@ -33,47 +34,50 @@ def _build_daily_report_message(report_day: datetime, summary: dict) -> str:
     top_symbols = summary["top_symbols"]
 
     lines = [
-        f"Daily Signal Report | {report_day.strftime('%Y-%m-%d')} ({report_day.strftime('%Z')})",
-        f"Total signals: {total}",
-        f"Average quality: {avg_quality}/100",
+        f"每日信号报告 | {report_day.strftime('%Y-%m-%d')} ({report_day.strftime('%Z')})",
+        f"信号总数: {total}",
+        f"平均质量: {avg_quality}/100",
     ]
 
     if by_type:
-        lines.append("By type:")
+        lines.append("按类型:")
         for item in by_type:
-            lines.append(f"- {item['signal_type']}: {item['count']}")
+            type_label = label_signal_type(item["signal_type"])
+            lines.append(f"- {type_label}: {item['count']}")
 
     if top_symbols:
-        lines.append("Top symbols:")
+        lines.append("活跃标的:")
         for item in top_symbols:
-            lines.append(f"- {item['symbol']}: {item['count']} signals, avg quality {item['avg_quality']}")
+            lines.append(
+                f"- {item['symbol']}: {item['count']} 次信号, 平均质量 {item['avg_quality']}"
+            )
 
-    lines.append("Reference only, not financial advice.")
+    lines.append("仅供参考，不构成投资建议。")
     return "\n".join(lines)
 
 
 def _build_weekly_report_message(report_day: datetime, summary: dict) -> str:
     lines = [
-        f"Weekly Signal Report | week of {report_day.strftime('%Y-%m-%d')} ({report_day.strftime('%Z')})",
-        f"Total signals: {summary['total_count']}",
-        f"Average quality: {summary['avg_quality']}/100",
+        f"每周信号报告 | 截至 {report_day.strftime('%Y-%m-%d')} ({report_day.strftime('%Z')})",
+        f"信号总数: {summary['total_count']}",
+        f"平均质量: {summary['avg_quality']}/100",
     ]
 
     by_tier = summary.get("by_tier", [])
     if by_tier:
-        lines.append("Priority mix:")
+        lines.append("优先级分布:")
         for item in by_tier:
-            lines.append(f"- Tier {item['tier']}: {item['count']}")
+            lines.append(f"- {item['tier']}级: {item['count']}")
 
     top_symbols = summary.get("top_symbols", [])
     if top_symbols:
-        lines.append("Top symbols:")
+        lines.append("活跃标的:")
         for item in top_symbols:
             lines.append(
-                f"- {item['symbol']}: {item['count']} signals, avg quality {item['avg_quality']}"
+                f"- {item['symbol']}: {item['count']} 次信号, 平均质量 {item['avg_quality']}"
             )
 
-    lines.append("Reference only, not financial advice.")
+    lines.append("仅供参考，不构成投资建议。")
     return "\n".join(lines)
 
 
@@ -193,13 +197,14 @@ def run() -> None:
                             and merged_recent["signal_type"] != signal.signal_type
                         ):
                             merged_message = (
-                                f"{signal.symbol} | merged_update | {signal.timeframe}\n"
-                                f"Latest: {signal.signal_type} (Tier {signal.priority_tier}, quality {signal.quality_score})\n"
-                                f"Previous: {merged_recent['signal_type']} "
-                                f"(Tier {merged_recent['priority_tier']}, quality {merged_recent['quality_score']})\n"
-                                f"Current price: {signal.price}\n"
-                                f"Reason: {signal.explanation}\n"
-                                f"Reference only, not financial advice."
+                                f"{signal.symbol} | 信号更新 | {signal.timeframe}\n"
+                                f"最新: {label_signal_type(signal.signal_type)} "
+                                f"({signal.priority_tier}级, 质量 {signal.quality_score})\n"
+                                f"此前: {label_signal_type(merged_recent['signal_type'])} "
+                                f"({merged_recent['priority_tier']}级, 质量 {merged_recent['quality_score']})\n"
+                                f"当前价格: {signal.price}\n"
+                                f"说明: {signal.explanation}\n"
+                                f"仅供参考，不构成投资建议。"
                             )
                             ok, err = notifier.send_text(merged_message)
                             status = "merged_sent" if ok else "merged_failed"

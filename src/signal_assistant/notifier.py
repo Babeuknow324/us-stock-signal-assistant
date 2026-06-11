@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 import requests
 
 from .config import Settings
+from .labels import label_evidence_strength, label_risk_level, label_signal_type
 from .signal_engine import SignalResult
 
 LOGGER = logging.getLogger(__name__)
@@ -13,35 +14,38 @@ FEISHU_KEYWORD_PREFIX = "[signal-assistant]"
 
 
 def _format_signal_message(signal: SignalResult) -> str:
+    signal_label = label_signal_type(signal.signal_type)
+    risk_label = label_risk_level(signal.risk_level)
+    evidence_label = label_evidence_strength(signal.rule_evidence_strength)
     base = (
-        f"{signal.symbol} | {signal.signal_type} | {signal.timeframe}\n"
-        f"Current price: {signal.price}\n"
-        f"Entry zone: {signal.entry_min} - {signal.entry_max}\n"
-        f"Invalidation: {signal.invalidation}\n"
-        f"Nearest resistance: {signal.resistance}\n"
-        f"Risk level: {signal.risk_level}\n"
+        f"{signal.symbol} | {signal_label} | {signal.timeframe}\n"
+        f"当前价格: {signal.price}\n"
+        f"参考入场: {signal.entry_min} - {signal.entry_max}\n"
+        f"失效位: {signal.invalidation}\n"
+        f"最近阻力: {signal.resistance}\n"
+        f"风险等级: {risk_label}\n"
         f"ATR%: {signal.atr_pct}\n"
-        f"Priority: {signal.priority_tier}\n"
-        f"Rule quality: {signal.quality_score}/100 ({signal.rule_evidence_strength})\n"
-        f"Reason: {signal.explanation}\n"
+        f"优先级: {signal.priority_tier}级\n"
+        f"规则质量: {signal.quality_score}/100（证据强度{evidence_label}）\n"
+        f"规则说明: {signal.explanation}\n"
     )
     llm = signal.llm_analysis or {}
     if llm:
         key_levels = ", ".join(llm.get("key_levels", []))
         ai_block = (
-            "\nAI view:\n"
-            f"- Summary: {llm.get('summary', '')}\n"
-            f"- Bull case: {llm.get('bull_case', '')}\n"
-            f"- Bear case: {llm.get('bear_case', '')}\n"
-            f"- Key levels: {key_levels}\n"
-            f"- Evidence: {llm.get('evidence_strength', 'medium')}\n"
-            f"- Confidence: {llm.get('confidence', 50)}/100\n"
-            f"- Invalid if: {llm.get('failure_condition', '')}\n"
-            f"- Next check: {llm.get('next_check', '')}\n"
-            f"- Risk note: {llm.get('risk_note', '')}\n"
+            "\nAI 解读:\n"
+            f"- 总结: {llm.get('summary', '')}\n"
+            f"- 多头逻辑: {llm.get('bull_case', '')}\n"
+            f"- 空头逻辑: {llm.get('bear_case', '')}\n"
+            f"- 关键位: {key_levels}\n"
+            f"- 证据强度: {label_evidence_strength(llm.get('evidence_strength', 'medium'))}\n"
+            f"- 置信度: {llm.get('confidence', 50)}/100\n"
+            f"- 失效条件: {llm.get('failure_condition', '')}\n"
+            f"- 下一步观察: {llm.get('next_check', '')}\n"
+            f"- 风险提示: {llm.get('risk_note', '')}\n"
         )
         base += ai_block
-    return base + "Reference only, not financial advice."
+    return base + "仅供参考，不构成投资建议。"
 
 
 class TelegramNotifier:
