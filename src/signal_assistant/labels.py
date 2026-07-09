@@ -3,7 +3,7 @@ from __future__ import annotations
 SIGNAL_TYPE_LABELS = {
     "long_setup": "偏多候选",
     "breakout_candidate": "突破候选",
-    "exit_warning": "风控提醒",
+    "exit_warning": "卖点提醒",
     "observation_only": "观察",
 }
 

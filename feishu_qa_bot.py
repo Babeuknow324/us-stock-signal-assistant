@@ -18,7 +18,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from signal_assistant.qa_service import route_command  # noqa: E402
+from signal_assistant.qa_service import route_text  # noqa: E402
 
 
 def _parse_bool(value: str, default: bool) -> bool:
@@ -68,8 +68,17 @@ class FeishuClient:
             "content": json.dumps({"text": text}, ensure_ascii=False),
         }
         response = requests.post(url, headers=headers, json=payload, timeout=10)
-        response.raise_for_status()
-        body = response.json()
+        body_text = response.text
+        body = {}
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Feishu send HTTP {response.status_code}: {body or body_text}"
+            )
         if body.get("code", -1) != 0:
             raise RuntimeError(f"Feishu send failed: {body}")
 
@@ -78,6 +87,7 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
     client: Optional[FeishuClient] = None
     verify_token: str = ""
     debug_echo: bool = True
+    chat_last_symbol: dict[str, str] = {}
 
     def _send_json(self, status: int, body: dict) -> None:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -125,7 +135,10 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
             text = _normalize_incoming_text(json.loads(content_raw).get("text", ""))
             print(f"Feishu inbound text: {text}")
 
-            handled, reply = route_command(text)
+            default_symbol = self.chat_last_symbol.get(chat_id)
+            handled, reply, used_symbol = route_text(text, default_symbol=default_symbol)
+            if handled and used_symbol:
+                self.chat_last_symbol[chat_id] = used_symbol
             if self.client is not None:
                 if handled:
                     self.client.send_text_to_chat(chat_id, reply)
@@ -134,7 +147,7 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
                         chat_id,
                         (
                             f"已收到消息但未识别命令: {text or '(empty)'}\n"
-                            "请发送“帮助”查看可用命令。"
+                            "可直接自然语言提问，例如“NVDA 现在能买吗？”，或发送“帮助”。"
                         ),
                     )
             self._send_json(200, {"code": 0})

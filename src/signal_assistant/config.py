@@ -63,6 +63,12 @@ class Settings:
     relative_strength_min_excess_return: float
     enable_breakout_retest_filter: bool
     breakout_retest_tolerance_pct: float
+    buy_rsi_ceiling: float
+    breakout_rsi_ceiling: float
+    min_buy_reward_risk: float
+    min_trend_ma_gap_pct: float
+    min_breakout_close_strength: float
+    long_max_ma20_distance_pct: float
 
     alert_cooldown_minutes: int
     duplicate_price_tolerance_pct: float
@@ -161,6 +167,12 @@ def load_settings() -> Settings:
         ),
         enable_breakout_retest_filter=_parse_bool(os.getenv("ENABLE_BREAKOUT_RETEST_FILTER"), True),
         breakout_retest_tolerance_pct=_parse_float(os.getenv("BREAKOUT_RETEST_TOLERANCE_PCT"), 0.004),
+        buy_rsi_ceiling=_parse_float(os.getenv("BUY_RSI_CEILING"), 72.0),
+        breakout_rsi_ceiling=_parse_float(os.getenv("BREAKOUT_RSI_CEILING"), 78.0),
+        min_buy_reward_risk=_parse_float(os.getenv("MIN_BUY_REWARD_RISK"), 1.2),
+        min_trend_ma_gap_pct=_parse_float(os.getenv("MIN_TREND_MA_GAP_PCT"), 0.001),
+        min_breakout_close_strength=_parse_float(os.getenv("MIN_BREAKOUT_CLOSE_STRENGTH"), 0.55),
+        long_max_ma20_distance_pct=_parse_float(os.getenv("LONG_MAX_MA20_DISTANCE_PCT"), 0.025),
         alert_cooldown_minutes=_parse_int(os.getenv("ALERT_COOLDOWN_MINUTES"), 30),
         duplicate_price_tolerance_pct=_parse_float(
             os.getenv("DUPLICATE_PRICE_TOLERANCE_PCT"), 0.003

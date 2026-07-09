@@ -13,21 +13,42 @@ LOGGER = logging.getLogger(__name__)
 FEISHU_KEYWORD_PREFIX = "[signal-assistant]"
 
 
+def _signal_trade_bias(signal_type: str) -> str:
+    if signal_type in {"breakout_candidate", "long_setup"}:
+        return "买点关注"
+    if signal_type == "exit_warning":
+        return "卖点/减仓关注"
+    return "继续观察"
+
+
+def _signal_action_hint(signal_type: str) -> str:
+    hints = {
+        "breakout_candidate": "优先等回踩不破再介入，避免追高。",
+        "long_setup": "可分批试仓，失效位下方不恋战。",
+        "exit_warning": "若已有仓位，优先减仓或收紧止损。",
+        "observation_only": "暂不交易，等待下一次触发。",
+    }
+    return hints.get(signal_type, "等待下一次明确信号。")
+
+
 def _format_signal_message(signal: SignalResult) -> str:
     signal_label = label_signal_type(signal.signal_type)
     risk_label = label_risk_level(signal.risk_level)
     evidence_label = label_evidence_strength(signal.rule_evidence_strength)
+    trade_bias = _signal_trade_bias(signal.signal_type)
+    action_hint = _signal_action_hint(signal.signal_type)
     base = (
-        f"{signal.symbol} | {signal_label} | {signal.timeframe}\n"
-        f"当前价格: {signal.price}\n"
-        f"参考入场: {signal.entry_min} - {signal.entry_max}\n"
-        f"失效位: {signal.invalidation}\n"
-        f"最近阻力: {signal.resistance}\n"
-        f"风险等级: {risk_label}\n"
-        f"ATR%: {signal.atr_pct}\n"
-        f"优先级: {signal.priority_tier}级\n"
-        f"规则质量: {signal.quality_score}/100（证据强度{evidence_label}）\n"
-        f"规则说明: {signal.explanation}\n"
+        "【交易信号卡】\n"
+        f"标的: {signal.symbol} ({signal.timeframe})\n"
+        f"信号: {signal_label} | 方向: {trade_bias}\n"
+        f"当前价: {signal.price}\n"
+        f"买点区间: {signal.entry_min} - {signal.entry_max}\n"
+        f"卖点/止损参考: {signal.invalidation}\n"
+        f"目标/压力参考: {signal.resistance}\n"
+        f"执行建议: {action_hint}\n"
+        f"信号质量: {signal.quality_score}/100（{signal.priority_tier}级, 证据{evidence_label}）\n"
+        f"风险标签: {risk_label} | ATR: {signal.atr_pct}%\n"
+        f"逻辑说明: {signal.explanation}\n"
     )
     llm = signal.llm_analysis or {}
     if llm:
