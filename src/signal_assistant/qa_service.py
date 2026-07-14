@@ -8,6 +8,7 @@ from .config import Settings, load_settings
 from .llm_analyzer import LLMAnalyzer
 from .labels import label_evidence_strength, label_risk_level, label_signal_type
 from .longbridge_client import LongbridgeMarketDataClient
+from .review_bot import format_review_reply
 from .signal_engine import SignalEngine, SignalResult
 
 
@@ -75,7 +76,7 @@ def get_snapshot(
 
 
 def format_price_reply(snapshot: QuerySnapshot) -> str:
-    return f"{snapshot.symbol} 最新价: {snapshot.price:.2f}"
+    return f"我刚看了下，{snapshot.symbol} 现在大概在 {snapshot.price:.2f}。"
 
 
 def _signal_trade_bias(signal_type: str) -> str:
@@ -100,24 +101,21 @@ def _format_signal_card(snapshot: QuerySnapshot, title: str) -> str:
     signal = snapshot.signal
     if signal is None:
         return (
-            f"【{title}】\n"
-            f"标的: {snapshot.symbol}\n"
-            f"当前价: {snapshot.price:.2f}\n"
-            "当前无有效买卖点，建议继续观察。"
+            f"我看了下 {snapshot.symbol}，当前价格 {snapshot.price:.2f}。\n"
+            "暂时没有明确买卖点，先观察会更稳一点。"
         )
 
+    bias = _signal_trade_bias(signal.signal_type)
+    hint = _action_hint(signal.signal_type)
     return (
-        f"【{title}】\n"
-        f"标的: {snapshot.symbol} ({signal.timeframe})\n"
-        f"方向: {_signal_trade_bias(signal.signal_type)}\n"
-        f"信号: {label_signal_type(signal.signal_type)}\n"
-        f"当前价: {snapshot.price:.2f}\n"
-        f"买点区间: {signal.entry_min}-{signal.entry_max}\n"
-        f"卖点/止损参考: {signal.invalidation}\n"
-        f"目标/压力参考: {signal.resistance}\n"
-        f"执行建议: {_action_hint(signal.signal_type)}\n"
-        f"信号质量: {signal.quality_score}/100 ({signal.priority_tier}级)\n"
-        f"风险标签: {label_risk_level(signal.risk_level)} | ATR {signal.atr_pct}%"
+        f"我看了下 {snapshot.symbol}（{signal.timeframe}），当前更偏 **{bias}**。\n"
+        f"信号类型是「{label_signal_type(signal.signal_type)}」，现价 {snapshot.price:.2f}。\n"
+        f"- 买点区间：{signal.entry_min}-{signal.entry_max}\n"
+        f"- 卖点/止损参考：{signal.invalidation}\n"
+        f"- 目标/压力参考：{signal.resistance}\n"
+        f"- 执行建议：{hint}\n"
+        f"- 信号质量：{signal.quality_score}/100（{signal.priority_tier}级）\n"
+        f"- 风险标签：{label_risk_level(signal.risk_level)}，ATR {signal.atr_pct}%"
     )
 
 
@@ -133,7 +131,7 @@ def format_buypoint_reply(snapshot: QuerySnapshot) -> str:
     if signal.signal_type not in {"breakout_candidate", "long_setup"}:
         return (
             _format_signal_card(snapshot, title="买点卡")
-            + "\n提示: 当前不是偏多触发窗口，买点性价比一般。"
+            + "\n补一句：现在不是标准偏多触发窗口，先别急着追会更划算。"
         )
     return _format_signal_card(snapshot, title="买点卡")
 
@@ -145,7 +143,7 @@ def format_sellpoint_reply(snapshot: QuerySnapshot) -> str:
     if signal.signal_type != "exit_warning":
         return (
             _format_signal_card(snapshot, title="卖点卡")
-            + "\n提示: 当前未出现强卖点，可按失效位做防守。"
+            + "\n目前还没到强卖点，先按失效位做防守就好。"
         )
     return _format_signal_card(snapshot, title="卖点卡")
 
@@ -154,18 +152,15 @@ def format_counter_question_reply(snapshot: QuerySnapshot) -> str:
     signal = snapshot.signal
     if signal is None:
         return (
-            f"【反问清单】\n"
-            f"{snapshot.symbol} 当前无明确信号。\n"
-            "你可以先回答这三问：\n"
+            f"{snapshot.symbol} 现在没有特别清晰的触发。\n"
+            "你可以先想清楚这三件事：\n"
             "1) 是想找买点还是卖点？\n"
             "2) 可承受的止损幅度是多少？\n"
             "3) 你更看重突破还是回踩？"
         )
     return (
-        f"【反问清单】\n"
-        f"标的: {snapshot.symbol}\n"
-        f"当前信号: {label_signal_type(signal.signal_type)}\n"
-        "请先确认这 4 点再下单：\n"
+        f"{snapshot.symbol} 当前信号是「{label_signal_type(signal.signal_type)}」。\n"
+        "如果你准备下单，先确认这 4 点：\n"
         f"1) 触发条件是否满足（价格在 {signal.entry_min}-{signal.entry_max} 区间）？\n"
         f"2) 失效位 {signal.invalidation} 触发后是否愿意执行止损？\n"
         f"3) 目标/压力位 {signal.resistance} 附近是否有减仓计划？\n"
@@ -175,41 +170,39 @@ def format_counter_question_reply(snapshot: QuerySnapshot) -> str:
 
 def format_risk_reply(snapshot: QuerySnapshot) -> str:
     if snapshot.signal is None:
-        return f"{snapshot.symbol}\n当前无触发信号，风险中性偏观望。"
+        return f"{snapshot.symbol} 当前没有明显风险触发，先中性观察就行。"
     signal = snapshot.signal
     return (
-        f"{snapshot.symbol}\n"
-        f"风险等级: {label_risk_level(signal.risk_level)}\n"
-        f"失效位: {signal.invalidation}\n"
-        f"当前价: {snapshot.price:.2f}\n"
-        f"说明: {signal.explanation}"
+        f"{snapshot.symbol} 的风险等级目前是 {label_risk_level(signal.risk_level)}。\n"
+        f"当前价 {snapshot.price:.2f}，关键失效位在 {signal.invalidation}。\n"
+        f"一句话：{signal.explanation}"
     )
 
 
 def format_explain_reply(snapshot: QuerySnapshot) -> str:
     if snapshot.signal is None:
-        return f"{snapshot.symbol}\n当前无触发信号，暂无结构化解释。"
+        return f"{snapshot.symbol} 现在还没触发明确结构，所以暂时没有可解释的信号逻辑。"
     if snapshot.llm_text:
-        return f"{snapshot.symbol}\n{snapshot.llm_text}"
+        return f"我按当前信号帮你拆解一下 {snapshot.symbol}：\n{snapshot.llm_text}"
     return (
-        f"{snapshot.symbol}\n"
-        f"当前信号: {label_signal_type(snapshot.signal.signal_type)}\n"
-        f"规则解释: {snapshot.signal.explanation}\n"
-        "LLM 未启用或本次未返回分析。"
+        f"{snapshot.symbol} 当前信号是「{label_signal_type(snapshot.signal.signal_type)}」。\n"
+        f"规则侧的解释是：{snapshot.signal.explanation}\n"
+        "这次没有拿到 LLM 解读，我先给你规则版本。"
     )
 
 
 def _help_text() -> str:
     return (
-        "可用命令示例:\n"
+        "你可以像聊天一样问我，也可以用命令：\n"
         "- 价格 NVDA\n"
         "- 建议 NVDA\n"
         "- 买点 NVDA\n"
         "- 卖点 TSLA\n"
+        "- 审单 NVDA\n"
         "- 反问 QQQ\n"
         "- 解释 HK.07709\n"
         "- 风控 TSLA\n"
-        "也支持自然语言:\n"
+        "自然语言示例：\n"
         "- NVDA 现在能买吗？\n"
         "- TSLA 该不该减仓？\n"
         "- 7709 怎么看？"
@@ -229,6 +222,9 @@ def _dispatch_command(cmd: str, symbol: str) -> Tuple[bool, str, str]:
     if cmd in {"sell", "卖点", "卖出"}:
         snap = get_snapshot(symbol, include_llm=False)
         return True, format_sellpoint_reply(snap), snap.symbol
+    if cmd in {"review", "审单", "复核", "crosscheck"}:
+        snap = get_snapshot(symbol, include_llm=False)
+        return True, format_review_reply(snap), snap.symbol
     if cmd in {"counter", "反问", "复盘"}:
         snap = get_snapshot(symbol, include_llm=False)
         return True, format_counter_question_reply(snap), snap.symbol
@@ -270,6 +266,20 @@ def _infer_intent(raw: str) -> Optional[str]:
         return "buy"
     if any(k in text for k in {"卖点", "卖出", "减仓", "止盈", "离场", "平仓"}):
         return "sell"
+    if any(
+        k in text
+        for k in {
+            "审单",
+            "审一下",
+            "复核",
+            "校验",
+            "过一遍",
+            "检查这单",
+            "cross check",
+            "crosscheck",
+        }
+    ):
+        return "review"
     if any(k in text for k in {"风控", "风险", "止损", "失效"}):
         return "risk"
     if any(k in text for k in {"解释", "逻辑", "为什么", "分析"}):
@@ -278,6 +288,15 @@ def _infer_intent(raw: str) -> Optional[str]:
         return "counter"
     if any(k in text for k in {"建议", "怎么看", "怎么样"}):
         return "advice"
+    return None
+
+
+def _smalltalk_reply(raw: str) -> Optional[str]:
+    text = raw.strip().lower()
+    if any(k in text for k in {"在吗", "在不在", "你好", "hi", "hello"}):
+        return "我在，随时可以问我盘中问题。比如：NVDA 现在能买吗？"
+    if any(k in text for k in {"谢谢", "thank", "thx"}):
+        return "不客气，我们继续盯盘就好。"
     return None
 
 
@@ -303,14 +322,22 @@ def route_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, s
     if intent == "help":
         return True, _help_text(), None
     if intent is None:
+        talk = _smalltalk_reply(raw)
+        if talk:
+            return True, talk, default_symbol
+
+        symbol_guess = _extract_symbol_from_text(raw) or default_symbol
+        if symbol_guess:
+            snap = get_snapshot(symbol_guess, include_llm=False)
+            return True, format_advice_reply(snap), snap.symbol
         return (
-            False,
+            True,
             (
-                "我收到了你的消息，但还不确定你想查什么。\n"
-                "你可以直接说：\n"
+                "没问题，我可以随时自然语言聊盘。\n"
+                "你直接像这样问我就行：\n"
                 "- NVDA 现在能买吗？\n"
-                "- TSLA 该不该减仓？\n"
-                "- QQQ 怎么看？"
+                "- TSLA 要不要减仓？\n"
+                "- 帮我审一下 SPY"
             ),
             None,
         )
@@ -325,6 +352,33 @@ def route_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, s
 
     handled, reply, used_symbol = _dispatch_command(intent, symbol)
     return handled, reply, used_symbol if handled else None
+
+
+def route_review_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
+    raw = text.strip()
+    if not raw:
+        return False, "", None
+
+    normalized = raw.replace("：", ":")
+    match = re.match(r"^([^\s:]+)\s*(?::|\s)\s*([A-Za-z0-9.]+)$", normalized)
+    if match:
+        cmd = match.group(1).lower()
+        symbol = match.group(2)
+        if cmd in {"review", "审单", "复核", "crosscheck", "cross-check"}:
+            snap = get_snapshot(symbol, include_llm=False)
+            return True, format_review_reply(snap), snap.symbol
+        return False, "", None
+
+    intent = _infer_intent(raw)
+    if intent != "review":
+        return False, "", None
+
+    symbol = _extract_symbol_from_text(raw) or default_symbol
+    if not symbol:
+        return True, "请告诉我要审哪只标的，例如：审单 NVDA。", None
+
+    snap = get_snapshot(symbol, include_llm=False)
+    return True, format_review_reply(snap), snap.symbol
 
 
 def route_command(text: str) -> Tuple[bool, str]:
