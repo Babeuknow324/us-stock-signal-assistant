@@ -192,8 +192,8 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
                     self.client.send_text_to_chat(
                         chat_id,
                         (
-                            f"已收到消息但未识别命令: {text or '(empty)'}\n"
-                            "可直接自然语言提问，例如“NVDA 现在能买吗？”，或发送“帮助”。"
+                            f"我收到了这句话：{text or '(empty)'}\n"
+                            "你直接自然语言问我就行，例如“NVDA 现在能买吗？”或“SPY 期权怎么做？”。"
                         ),
                     )
             self._send_json(200, {"code": 0})

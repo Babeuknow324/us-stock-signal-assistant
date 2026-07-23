@@ -354,21 +354,15 @@ def format_option_reply(
 
 def _help_text() -> str:
     return (
-        "你可以像聊天一样问我，也可以用命令：\n"
-        "- 价格 NVDA\n"
-        "- 建议 NVDA\n"
-        "- 买点 NVDA\n"
-        "- 卖点 TSLA\n"
-        "- 审单 NVDA\n"
-        "- 反问 QQQ\n"
-        "- 解释 HK.07709\n"
-        "- 基本面 NVDA\n"
-        "- 期权 SPY\n"
-        "- 风控 TSLA\n"
-        "自然语言示例：\n"
+        "你直接像平时聊天那样问我就行，我会自动识别意图。\n"
+        "例如你可以这样问：\n"
         "- NVDA 现在能买吗？\n"
-        "- TSLA 该不该减仓？\n"
-        "- 7709 怎么看？"
+        "- TSLA 要不要减仓？\n"
+        "- 帮我审一下 MU 这单\n"
+        "- MU 基本面怎么样？\n"
+        "- NVDA 基本面和技术面一起看下\n"
+        "- SPY 期权怎么做？\n"
+        "- 那如果改成下周到期呢？"
     )
 
 
@@ -531,7 +525,7 @@ def route_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, s
     if raw in {"帮助", "help", "/help", "指令"}:
         return True, _help_text(), None
 
-    # Explicit command mode: "建议 NVDA" / "建议:NVDA"
+    # Backward-compatible explicit mode; natural language remains first-class.
     normalized = raw.replace("：", ":")
     match = re.match(r"^([^\s:]+)\s*(?::|\s)\s*([A-Za-z0-9.]+)$", normalized)
     if match:
@@ -563,11 +557,12 @@ def route_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, s
         return (
             True,
             (
-                "没问题，我可以随时自然语言聊盘。\n"
-                "你直接像这样问我就行：\n"
+                "没问题，我们就按自然语言来聊。\n"
+                "你可以直接这样问：\n"
                 "- NVDA 现在能买吗？\n"
                 "- TSLA 要不要减仓？\n"
-                "- 帮我审一下 SPY"
+                "- MU 基本面怎么样？\n"
+                "- SPY 期权怎么做？"
             ),
             None,
         )
@@ -576,7 +571,7 @@ def route_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, s
     if not symbol:
         return (
             True,
-            "我理解你的意图了，但还缺少标的代码。请补一个，如：NVDA、TSLA、7709。",
+            "我理解你的意思了，但还缺一个标的。比如你可以说：`NVDA`、`TSLA`、`SPY`。",
             None,
         )
 
