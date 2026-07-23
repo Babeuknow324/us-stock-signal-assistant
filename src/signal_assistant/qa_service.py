@@ -288,6 +288,7 @@ def format_option_reply(
     symbol: str,
     default_symbol: Optional[str] = None,
     horizon_hint: Optional[str] = None,
+    preference_text: Optional[str] = None,
     settings: Optional[Settings] = None,
 ) -> tuple[str, str]:
     cfg = settings or load_settings()
@@ -308,7 +309,24 @@ def format_option_reply(
             snap.symbol,
         )
 
-    if snap.signal and snap.signal.signal_type in {"breakout_candidate", "long_setup"}:
+    pref = (preference_text or "").lower()
+    prefer_single_leg = any(k in pref for k in {"单腿", "裸买", "single leg", "single-leg"})
+    prefer_bull = any(k in pref for k in {"做多", "偏多", "看涨", "bull", "call", "单腿多"})
+    prefer_bear = any(k in pref for k in {"做空", "偏空", "看跌", "bear", "put", "单腿空"})
+
+    if prefer_bull:
+        direction = "偏多（按你的偏好）"
+        if prefer_single_leg:
+            structure = "按你偏好：单腿买入 call（优先 ATM 或轻度 ITM）"
+        else:
+            structure = "优先考虑 call debit spread（比裸买 call 更稳）"
+    elif prefer_bear:
+        direction = "偏空（按你的偏好）"
+        if prefer_single_leg:
+            structure = "按你偏好：单腿买入 put（优先 ATM 或轻度 ITM）"
+        else:
+            structure = "可考虑 put debit spread，避免裸买 put 的时间损耗压力"
+    elif snap.signal and snap.signal.signal_type in {"breakout_candidate", "long_setup"}:
         direction = "偏多"
         structure = "优先考虑 call debit spread（比裸买 call 更稳）"
     elif snap.signal and snap.signal.signal_type == "exit_warning":
@@ -316,7 +334,10 @@ def format_option_reply(
         structure = "可考虑 put debit spread，避免裸买 put 的时间损耗压力"
     else:
         direction = "中性观察"
-        structure = "先等方向明确，再选期权结构"
+        if prefer_single_leg:
+            structure = "按你偏好先用单腿，但建议等方向明确后再开仓"
+        else:
+            structure = "先等方向明确，再选期权结构"
 
     if option_snap.pcr is not None:
         if option_snap.pcr >= 1.2:
@@ -395,7 +416,7 @@ def _dispatch_command(cmd: str, symbol: str) -> Tuple[bool, str, str]:
         reply, used_symbol = format_tech_fund_reply(symbol)
         return True, reply, used_symbol
     if cmd in {"option", "期权", "op"}:
-        reply, used_symbol = format_option_reply(symbol)
+        reply, used_symbol = format_option_reply(symbol, preference_text=cmd)
         return True, reply, used_symbol
     if cmd in {"risk", "风控", "风险"}:
         snap = get_snapshot(symbol, include_llm=False)
@@ -473,6 +494,9 @@ def _infer_intent(raw: str) -> Optional[str]:
             "行权价",
             "delta",
             "gamma",
+            "单腿",
+            "看涨",
+            "看跌",
         }
     ):
         return "option"
@@ -577,7 +601,12 @@ def route_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, s
 
     if intent == "option":
         horizon_hint = "next_week" if any(k in raw for k in {"下周", "next week", "nextweek"}) else None
-        reply, used_symbol = format_option_reply(symbol, default_symbol=default_symbol, horizon_hint=horizon_hint)
+        reply, used_symbol = format_option_reply(
+            symbol,
+            default_symbol=default_symbol,
+            horizon_hint=horizon_hint,
+            preference_text=raw,
+        )
         return True, reply, used_symbol or normalize_user_symbol(symbol)
 
     handled, reply, used_symbol = _dispatch_command(intent, symbol)
