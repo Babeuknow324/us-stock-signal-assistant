@@ -9,6 +9,7 @@ from .fundamental_service import fetch_fundamental_snapshot
 from .llm_analyzer import LLMAnalyzer
 from .labels import label_evidence_strength, label_risk_level, label_signal_type
 from .longbridge_client import LongbridgeMarketDataClient
+from .option_service import fetch_option_snapshot
 from .review_bot import format_review_reply
 from .signal_engine import SignalEngine, SignalResult
 
@@ -263,6 +264,94 @@ def format_tech_fund_reply(symbol: str, default_symbol: Optional[str] = None) ->
     return reply, snap.symbol
 
 
+def _allowed_option_underlyings(settings: Settings) -> set[str]:
+    allowed = {normalize_user_symbol(item) for item in settings.watchlist}
+    # Keep a practical fallback universe for US options if watchlist changes.
+    allowed.update(
+        {
+            "US.SPY",
+            "US.NVDA",
+            "US.MSFT",
+            "US.AAPL",
+            "US.AMZN",
+            "US.META",
+            "US.TSLA",
+            "US.GOOGL",
+            "US.MU",
+            "US.SNDK",
+        }
+    )
+    return allowed
+
+
+def format_option_reply(
+    symbol: str,
+    default_symbol: Optional[str] = None,
+    horizon_hint: Optional[str] = None,
+    settings: Optional[Settings] = None,
+) -> tuple[str, str]:
+    cfg = settings or load_settings()
+    symbol_guess = normalize_user_symbol(symbol or default_symbol or "")
+    if not symbol_guess:
+        return "你想看期权没问题，给我一个标的就行（例如 SPY / NVDA / TSLA）。", ""
+
+    allowed = _allowed_option_underlyings(cfg)
+    if symbol_guess not in allowed:
+        universe = ", ".join(sorted(allowed))
+        return f"{symbol_guess} 目前不在你这版期权范围里。\n当前支持: {universe}", symbol_guess
+
+    snap = get_snapshot(symbol_guess, settings=cfg, include_llm=False)
+    option_snap = fetch_option_snapshot(snap.symbol, spot_price=snap.price)
+    if not option_snap.available:
+        return (
+            f"{snap.symbol} 期权数据暂时拉取失败（{option_snap.error or 'unknown error'}），你可以稍后再试。",
+            snap.symbol,
+        )
+
+    if snap.signal and snap.signal.signal_type in {"breakout_candidate", "long_setup"}:
+        direction = "偏多"
+        structure = "优先考虑 call debit spread（比裸买 call 更稳）"
+    elif snap.signal and snap.signal.signal_type == "exit_warning":
+        direction = "偏防守/偏空"
+        structure = "可考虑 put debit spread，避免裸买 put 的时间损耗压力"
+    else:
+        direction = "中性观察"
+        structure = "先等方向明确，再选期权结构"
+
+    if option_snap.pcr is not None:
+        if option_snap.pcr >= 1.2:
+            flow_note = f"Put/Call 量比约 {option_snap.pcr:.2f}，资金更偏防守。"
+        elif option_snap.pcr <= 0.8:
+            flow_note = f"Put/Call 量比约 {option_snap.pcr:.2f}，资金偏风险偏好。"
+        else:
+            flow_note = f"Put/Call 量比约 {option_snap.pcr:.2f}，情绪中性。"
+    else:
+        flow_note = "暂未拿到 Put/Call 量比。"
+
+    dte_note = "建议先看 7-14 天到期，平衡胜率与时间损耗。"
+    if horizon_hint == "next_week":
+        dte_note = "你提到下周到期，建议优先 next week 的 ATM 附近价差单，控制 Theta 风险。"
+
+    expiry_preview = ", ".join(option_snap.expiry_dates[:4]) if option_snap.expiry_dates else "暂无到期日数据"
+    atm_iv = "N/A"
+    if option_snap.atm_call_iv is not None and option_snap.atm_put_iv is not None:
+        atm_iv = f"Call IV {option_snap.atm_call_iv:.3f} / Put IV {option_snap.atm_put_iv:.3f}"
+
+    reply = (
+        f"{snap.symbol} 期权融合卡（技术面 + 期权数据）\n"
+        f"- 当前技术面倾向: {direction}\n"
+        f"- 现价: {snap.price:.2f}\n"
+        f"- 结构建议: {structure}\n"
+        f"- 到期建议: {dte_note}\n"
+        f"- 近期到期日: {expiry_preview}\n"
+        f"- 量能: Call {option_snap.call_volume or 0} / Put {option_snap.put_volume or 0}\n"
+        f"- 情绪: {flow_note}\n"
+        f"- ATM参考: strike {option_snap.atm_strike or 'N/A'}, {atm_iv}\n"
+        "- 仓位建议: 单笔风险预算尽量 <= 账户 0.5%-1.0%"
+    )
+    return reply, snap.symbol
+
+
 def _help_text() -> str:
     return (
         "你可以像聊天一样问我，也可以用命令：\n"
@@ -274,6 +363,7 @@ def _help_text() -> str:
         "- 反问 QQQ\n"
         "- 解释 HK.07709\n"
         "- 基本面 NVDA\n"
+        "- 期权 SPY\n"
         "- 风控 TSLA\n"
         "自然语言示例：\n"
         "- NVDA 现在能买吗？\n"
@@ -310,6 +400,9 @@ def _dispatch_command(cmd: str, symbol: str) -> Tuple[bool, str, str]:
     if cmd in {"combo", "all", "综合", "一起看", "基本面技术面"}:
         reply, used_symbol = format_tech_fund_reply(symbol)
         return True, reply, used_symbol
+    if cmd in {"option", "期权", "op"}:
+        reply, used_symbol = format_option_reply(symbol)
+        return True, reply, used_symbol
     if cmd in {"risk", "风控", "风险"}:
         snap = get_snapshot(symbol, include_llm=False)
         return True, format_risk_reply(snap), snap.symbol
@@ -329,8 +422,20 @@ def _extract_symbol_from_text(raw: str) -> Optional[str]:
 
     # Ticker-like token possibly glued with Chinese words, e.g. "NVDA现在能买吗"
     candidates = re.findall(r"[A-Z]{1,5}", text)
+    stop_tokens = {
+        "HELP",
+        "BUY",
+        "SELL",
+        "RISK",
+        "PRICE",
+        "CALL",
+        "PUT",
+        "IV",
+        "PCR",
+        "ETF",
+    }
     for token in candidates:
-        if token not in {"HELP", "BUY", "SELL", "RISK", "PRICE"}:
+        if token not in stop_tokens:
             return token
     return None
 
@@ -361,6 +466,22 @@ def _infer_intent(raw: str) -> Optional[str]:
         return "review"
     if any(k in text for k in {"风控", "风险", "止损", "失效"}):
         return "risk"
+    if any(
+        k in text
+        for k in {
+            "期权",
+            "option",
+            "call",
+            "put",
+            "iv",
+            "pcr",
+            "到期",
+            "行权价",
+            "delta",
+            "gamma",
+        }
+    ):
+        return "option"
     if any(k in text for k in {"解释", "逻辑", "为什么", "分析"}):
         return "explain"
     if any(
@@ -458,6 +579,11 @@ def route_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, s
             "我理解你的意图了，但还缺少标的代码。请补一个，如：NVDA、TSLA、7709。",
             None,
         )
+
+    if intent == "option":
+        horizon_hint = "next_week" if any(k in raw for k in {"下周", "next week", "nextweek"}) else None
+        reply, used_symbol = format_option_reply(symbol, default_symbol=default_symbol, horizon_hint=horizon_hint)
+        return True, reply, used_symbol or normalize_user_symbol(symbol)
 
     handled, reply, used_symbol = _dispatch_command(intent, symbol)
     return handled, reply, used_symbol if handled else None
