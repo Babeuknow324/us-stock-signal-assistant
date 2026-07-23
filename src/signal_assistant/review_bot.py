@@ -3,10 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
+from .fundamental_service import fetch_fundamental_snapshot
 from .labels import label_risk_level, label_signal_type
 
 if TYPE_CHECKING:
     from .qa_service import QuerySnapshot
+
+NEW_STOCK_SYMBOLS = {"US.RAM", "US.SPCX"}
 
 
 @dataclass(frozen=True)
@@ -16,6 +19,7 @@ class ReviewResult:
     reasons: list[str]
     position_hint: str
     reward_risk: Optional[float]
+    fundamental_notes: list[str]
 
 
 def _score_to_status(score: int) -> str:
@@ -45,6 +49,7 @@ def review_snapshot(snapshot: QuerySnapshot) -> ReviewResult:
             reasons=["当前没有明确触发信号，审单不通过。"],
             position_hint="暂不交易",
             reward_risk=None,
+            fundamental_notes=[],
         )
 
     reasons: list[str] = []
@@ -109,14 +114,76 @@ def review_snapshot(snapshot: QuerySnapshot) -> ReviewResult:
         score += 3
         reasons.append(f"ATR 适中（{signal.atr_pct}%）。")
 
+    fundamentals = fetch_fundamental_snapshot(snapshot.symbol)
+    fundamental_notes: list[str] = []
+    if fundamentals.available:
+        if fundamentals.revenue_yoy is not None:
+            if fundamentals.revenue_yoy >= 0.10:
+                score += 6
+            elif fundamentals.revenue_yoy < 0:
+                score -= 5
+        if fundamentals.net_profit_yoy is not None:
+            if fundamentals.net_profit_yoy > 0:
+                score += 6
+            else:
+                score -= 6
+        if fundamentals.eps_yoy is not None:
+            if fundamentals.eps_yoy > 0:
+                score += 4
+            else:
+                score -= 4
+
+        if (
+            fundamentals.pe is not None
+            and fundamentals.pe_industry_median is not None
+            and fundamentals.pe_industry_median > 0
+        ):
+            if fundamentals.pe <= fundamentals.pe_industry_median * 1.5:
+                score += 3
+            else:
+                score -= 3
+
+        if fundamentals.analyst_recommend in {"strong_buy", "buy"}:
+            score += 5
+        elif fundamentals.analyst_recommend in {"sell", "under"}:
+            score -= 5
+
+        if fundamentals.target_upside_pct is not None:
+            if fundamentals.target_upside_pct >= 10:
+                score += 4
+            elif fundamentals.target_upside_pct < 0:
+                score -= 4
+
+        fundamental_notes = fundamentals.notes[:3]
+        reasons.append("已纳入基本面过滤（营收/利润/EPS/估值/机构目标）。")
+    else:
+        reasons.append("基本面数据暂不可用，本次仅按技术面审单。")
+
+    # New listing protection layer: stricter risk control and lighter sizing.
+    is_new_stock_mode = snapshot.symbol in NEW_STOCK_SYMBOLS or snapshot.history_bars < 160
+    if is_new_stock_mode:
+        score -= 15
+        reasons.append("新股保护层已启用：历史数据偏短，审单标准自动提高。")
+        if rr < 1.8:
+            score -= 10
+            reasons.append("新股模式下收益风险比要求更高（建议 >= 1.8）。")
+        if signal.signal_type == "breakout_candidate":
+            reasons.append("新股优先等待“突破后回踩确认”，避免追第一波冲高。")
+
     score = max(0, min(100, score))
+    if is_new_stock_mode and score >= 75:
+        score = 74
     status = _score_to_status(score)
+    position_hint = _position_hint(score)
+    if is_new_stock_mode and status != "BLOCK":
+        position_hint = "新股模式：建议极轻仓试错（例如 <=0.3x）并严格止损"
     return ReviewResult(
         status=status,
         score=score,
         reasons=reasons,
-        position_hint=_position_hint(score),
+        position_hint=position_hint,
         reward_risk=rr,
+        fundamental_notes=fundamental_notes,
     )
 
 
@@ -131,12 +198,14 @@ def format_review_reply(snapshot: QuerySnapshot) -> str:
     top_reasons = result.reasons[:3]
     reason_lines = "\n".join(f"- {item}" for item in top_reasons)
     rr_text = f"{result.reward_risk:.2f}" if result.reward_risk is not None else "N/A"
+    fundamental_text = "\n".join(f"- {item}" for item in result.fundamental_notes) or "- 暂无基本面摘要"
     return (
         f"{header}\n"
         f"标的: {snapshot.symbol} ({signal.timeframe})\n"
         f"当前信号: {label_signal_type(signal.signal_type)}\n"
         f"风险标签: {label_risk_level(signal.risk_level)}\n"
         f"收益风险比(估算): {rr_text}\n"
+        f"基本面摘要:\n{fundamental_text}\n"
         f"核心理由:\n{reason_lines}\n"
         f"仓位建议: {result.position_hint}"
     )

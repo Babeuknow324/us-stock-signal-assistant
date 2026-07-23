@@ -5,6 +5,7 @@ import re
 from typing import Optional, Tuple
 
 from .config import Settings, load_settings
+from .fundamental_service import fetch_fundamental_snapshot
 from .llm_analyzer import LLMAnalyzer
 from .labels import label_evidence_strength, label_risk_level, label_signal_type
 from .longbridge_client import LongbridgeMarketDataClient
@@ -18,6 +19,8 @@ class QuerySnapshot:
     price: float
     signal: Optional[SignalResult]
     llm_text: Optional[str]
+    history_bars: int
+    data_note: Optional[str]
 
 
 def normalize_user_symbol(raw: str) -> str:
@@ -54,7 +57,14 @@ def get_snapshot(
                 )
                 for timeframe in cfg.all_timeframes
             }
-        signal = signal_engine.evaluate(normalized, bars_by_timeframe, benchmark_bars_by_timeframe)
+        history_bars = min(len(df) for df in bars_by_timeframe.values()) if bars_by_timeframe else 0
+        signal = None
+        data_note = None
+        try:
+            signal = signal_engine.evaluate(normalized, bars_by_timeframe, benchmark_bars_by_timeframe)
+        except ValueError as exc:
+            # New listings or sparse bars can fail indicator bootstrap; keep Q&A alive.
+            data_note = f"历史K线数量不足，当前按观察模式处理（{exc}）。"
         llm_text = None
         if include_llm and signal is not None and llm_analyzer.enabled:
             llm_result, llm_error = llm_analyzer.analyze(signal)
@@ -70,7 +80,14 @@ def get_snapshot(
                 )
             elif llm_error:
                 llm_text = f"LLM 暂不可用: {llm_error}"
-        return QuerySnapshot(symbol=normalized, price=latest_price, signal=signal, llm_text=llm_text)
+        return QuerySnapshot(
+            symbol=normalized,
+            price=latest_price,
+            signal=signal,
+            llm_text=llm_text,
+            history_bars=history_bars,
+            data_note=data_note,
+        )
     finally:
         market_data_client.close()
 
@@ -120,32 +137,47 @@ def _format_signal_card(snapshot: QuerySnapshot, title: str) -> str:
 
 
 def format_advice_reply(snapshot: QuerySnapshot) -> str:
-    return _format_signal_card(snapshot, title="盘中决策卡")
+    message = _format_signal_card(snapshot, title="盘中决策卡")
+    if snapshot.data_note:
+        message += f"\n补充: {snapshot.data_note}"
+    return message
 
 
 def format_buypoint_reply(snapshot: QuerySnapshot) -> str:
     signal = snapshot.signal
     if signal is None:
-        return _format_signal_card(snapshot, title="买点卡")
+        message = _format_signal_card(snapshot, title="买点卡")
+        if snapshot.data_note:
+            message += f"\n补充: {snapshot.data_note}"
+        return message
 
     if signal.signal_type not in {"breakout_candidate", "long_setup"}:
         return (
             _format_signal_card(snapshot, title="买点卡")
             + "\n补一句：现在不是标准偏多触发窗口，先别急着追会更划算。"
         )
-    return _format_signal_card(snapshot, title="买点卡")
+    message = _format_signal_card(snapshot, title="买点卡")
+    if snapshot.data_note:
+        message += f"\n补充: {snapshot.data_note}"
+    return message
 
 
 def format_sellpoint_reply(snapshot: QuerySnapshot) -> str:
     signal = snapshot.signal
     if signal is None:
-        return _format_signal_card(snapshot, title="卖点卡")
+        message = _format_signal_card(snapshot, title="卖点卡")
+        if snapshot.data_note:
+            message += f"\n补充: {snapshot.data_note}"
+        return message
     if signal.signal_type != "exit_warning":
         return (
             _format_signal_card(snapshot, title="卖点卡")
             + "\n目前还没到强卖点，先按失效位做防守就好。"
         )
-    return _format_signal_card(snapshot, title="卖点卡")
+    message = _format_signal_card(snapshot, title="卖点卡")
+    if snapshot.data_note:
+        message += f"\n补充: {snapshot.data_note}"
+    return message
 
 
 def format_counter_question_reply(snapshot: QuerySnapshot) -> str:
@@ -191,6 +223,33 @@ def format_explain_reply(snapshot: QuerySnapshot) -> str:
     )
 
 
+def format_fundamental_reply(symbol: str) -> str:
+    normalized = normalize_user_symbol(symbol)
+    data = fetch_fundamental_snapshot(normalized)
+    if not data.available:
+        return f"{normalized} 的基本面数据暂时拉取失败（{data.error or 'unknown error'}），你可以稍后再试。"
+
+    lines = [f"{normalized} 基本面速览（Longbridge）"]
+    if data.revenue_yoy is not None:
+        lines.append(f"- 营收同比: {data.revenue_yoy * 100:.1f}%")
+    if data.net_profit_yoy is not None:
+        lines.append(f"- 净利润同比: {data.net_profit_yoy * 100:.1f}%")
+    if data.eps_yoy is not None:
+        lines.append(f"- EPS同比: {data.eps_yoy * 100:.1f}%")
+    if data.pe is not None:
+        pe_txt = f"{data.pe:.2f}x"
+        if data.pe_industry_median is not None:
+            pe_txt += f"（行业中位 {data.pe_industry_median:.2f}x）"
+        lines.append(f"- PE估值: {pe_txt}")
+    if data.analyst_recommend:
+        lines.append(f"- 机构一致评级: {data.analyst_recommend}")
+    if data.target_upside_pct is not None:
+        lines.append(f"- 机构目标隐含空间: {data.target_upside_pct:.1f}%")
+    if len(lines) == 1:
+        lines.append("- 暂无可用关键指标")
+    return "\n".join(lines)
+
+
 def _help_text() -> str:
     return (
         "你可以像聊天一样问我，也可以用命令：\n"
@@ -201,6 +260,7 @@ def _help_text() -> str:
         "- 审单 NVDA\n"
         "- 反问 QQQ\n"
         "- 解释 HK.07709\n"
+        "- 基本面 NVDA\n"
         "- 风控 TSLA\n"
         "自然语言示例：\n"
         "- NVDA 现在能买吗？\n"
@@ -231,6 +291,9 @@ def _dispatch_command(cmd: str, symbol: str) -> Tuple[bool, str, str]:
     if cmd in {"explain", "解释", "分析"}:
         snap = get_snapshot(symbol, include_llm=True)
         return True, format_explain_reply(snap), snap.symbol
+    if cmd in {"fund", "fundamental", "基本面", "财报", "估值", "机构评级"}:
+        normalized = normalize_user_symbol(symbol)
+        return True, format_fundamental_reply(normalized), normalized
     if cmd in {"risk", "风控", "风险"}:
         snap = get_snapshot(symbol, include_llm=False)
         return True, format_risk_reply(snap), snap.symbol
@@ -284,6 +347,8 @@ def _infer_intent(raw: str) -> Optional[str]:
         return "risk"
     if any(k in text for k in {"解释", "逻辑", "为什么", "分析"}):
         return "explain"
+    if any(k in text for k in {"基本面", "财报", "估值", "机构评级", "目标价", "roe", "eps"}):
+        return "fund"
     if any(k in text for k in {"反问", "我该怎么做", "怎么操作", "执行计划"}):
         return "counter"
     if any(k in text for k in {"建议", "怎么看", "怎么样"}):
