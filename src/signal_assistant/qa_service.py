@@ -250,6 +250,19 @@ def format_fundamental_reply(symbol: str) -> str:
     return "\n".join(lines)
 
 
+def format_tech_fund_reply(symbol: str, default_symbol: Optional[str] = None) -> tuple[str, str]:
+    symbol_guess = symbol or default_symbol or ""
+    snap = get_snapshot(symbol_guess, include_llm=False)
+    tech = format_advice_reply(snap)
+    fund = format_fundamental_reply(snap.symbol)
+    reply = (
+        f"{snap.symbol} 我给你合并看一遍（技术面 + 基本面）：\n\n"
+        f"{tech}\n\n"
+        f"{fund}"
+    )
+    return reply, snap.symbol
+
+
 def _help_text() -> str:
     return (
         "你可以像聊天一样问我，也可以用命令：\n"
@@ -294,6 +307,9 @@ def _dispatch_command(cmd: str, symbol: str) -> Tuple[bool, str, str]:
     if cmd in {"fund", "fundamental", "基本面", "财报", "估值", "机构评级"}:
         normalized = normalize_user_symbol(symbol)
         return True, format_fundamental_reply(normalized), normalized
+    if cmd in {"combo", "all", "综合", "一起看", "基本面技术面"}:
+        reply, used_symbol = format_tech_fund_reply(symbol)
+        return True, reply, used_symbol
     if cmd in {"risk", "风控", "风险"}:
         snap = get_snapshot(symbol, include_llm=False)
         return True, format_risk_reply(snap), snap.symbol
@@ -347,13 +363,34 @@ def _infer_intent(raw: str) -> Optional[str]:
         return "risk"
     if any(k in text for k in {"解释", "逻辑", "为什么", "分析"}):
         return "explain"
+    if any(
+        k in text
+        for k in {
+            "基本面和技术面",
+            "技术面和基本面",
+            "一起看",
+            "综合看",
+            "合并看",
+            "全看",
+        }
+    ):
+        return "combo"
     if any(k in text for k in {"基本面", "财报", "估值", "机构评级", "目标价", "roe", "eps"}):
         return "fund"
+    if any(k in text for k in {"技术面", "趋势", "形态", "均线", "支撑", "压力位", "走势"}):
+        return "advice"
     if any(k in text for k in {"反问", "我该怎么做", "怎么操作", "执行计划"}):
         return "counter"
     if any(k in text for k in {"建议", "怎么看", "怎么样"}):
         return "advice"
     return None
+
+
+def _needs_combo_reply(raw: str) -> bool:
+    text = raw.lower()
+    has_fund = any(k in text for k in {"基本面", "财报", "估值", "机构评级", "目标价", "roe", "eps"})
+    has_tech = any(k in text for k in {"技术面", "走势", "趋势", "形态", "均线", "支撑", "压力位", "信号"})
+    return has_fund and has_tech
 
 
 def _smalltalk_reply(raw: str) -> Optional[str]:
@@ -383,6 +420,13 @@ def route_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, s
         return handled, reply, used_symbol if handled else None
 
     # Natural language mode
+    if _needs_combo_reply(raw):
+        symbol_guess = _extract_symbol_from_text(raw) or default_symbol
+        if not symbol_guess:
+            return True, "你要我合并看基本面+技术面没问题，给我一个标的就行（例如 NVDA/TSLA/SPY）。", None
+        reply, used_symbol = format_tech_fund_reply(symbol_guess, default_symbol=default_symbol)
+        return True, reply, used_symbol
+
     intent = _infer_intent(raw)
     if intent == "help":
         return True, _help_text(), None
