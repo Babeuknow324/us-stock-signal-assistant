@@ -88,6 +88,29 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
     verify_token: str = ""
     debug_echo: bool = True
     chat_last_symbol: dict[str, str] = {}
+    processed_message_ids: dict[str, float] = {}
+    dedupe_ttl_seconds: int = 600
+
+    @classmethod
+    def _prune_processed_ids(cls, now_ts: float) -> None:
+        expired = [
+            mid
+            for mid, ts in cls.processed_message_ids.items()
+            if now_ts - ts > cls.dedupe_ttl_seconds
+        ]
+        for mid in expired:
+            cls.processed_message_ids.pop(mid, None)
+
+    @classmethod
+    def _is_duplicate_message(cls, message_id: str) -> bool:
+        if not message_id:
+            return False
+        now_ts = time.time()
+        cls._prune_processed_ids(now_ts)
+        if message_id in cls.processed_message_ids:
+            return True
+        cls.processed_message_ids[message_id] = now_ts
+        return False
 
     def _send_json(self, status: int, body: dict) -> None:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -123,6 +146,11 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
             event = body.get("event", {})
             message = event.get("message", {})
             if str(message.get("message_type", "")) != "text":
+                self._send_json(200, {"code": 0})
+                return
+            message_id = str(message.get("message_id", "")).strip()
+            if self._is_duplicate_message(message_id):
+                print(f"Feishu duplicate message ignored: {message_id}")
                 self._send_json(200, {"code": 0})
                 return
 
