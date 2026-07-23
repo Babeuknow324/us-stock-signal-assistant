@@ -118,6 +118,53 @@ What it returns:
 - action hint (`observe` / `long candidate` / `risk-control`)
 - key levels (entry zone, invalidation, resistance)
 
+## Backtest Mode (Rule Replay)
+
+You can replay the current rule engine on historical bars to get quick strategy stats.
+
+Examples:
+
+```bash
+python backtest.py US.NVDA
+python backtest.py US.SPY --bars 1000 --max-hold 30
+python backtest.py US.NVDA --exec-tf 15m --trend-tf 1h --confirm-tfs 5m,1m --save-trades data/backtest_nvda_15m.csv
+```
+
+Output includes:
+
+- total trades
+- win rate
+- total return
+- average return per trade
+- max drawdown
+- annualized Sharpe ratio
+- recent trade records (entry/exit/signal/exit reason)
+
+### Optional: sync each trade to Feishu Bitable
+
+Set:
+
+- `FEISHU_QA_APP_ID`
+- `FEISHU_QA_APP_SECRET`
+- `FEISHU_BITABLE_APP_TOKEN` (the Base app token, starts with `bascn`)
+- optional: `FEISHU_BITABLE_TABLE_ID` (target table id, starts with `tbl`)
+
+Then run:
+
+```bash
+python backtest.py US.NVDA --exec-tf 15m --trend-tf 1h --confirm-tfs 5m,1m --sync-feishu --feishu-table-name TradeRecords
+```
+
+The script will auto-create the table if it does not exist, then append one row per trade.
+
+If you already have a table id (`tbl...`), write directly:
+
+```bash
+python backtest.py US.NVDA --exec-tf 15m --trend-tf 1h --confirm-tfs 5m,1m --sync-feishu --feishu-table-id tblXXXXXXXXXXXX
+```
+
+Note: sync is idempotent by `TradeID` (symbol + entry_time + exit_time). Existing rows are skipped.
+
 ## Interactive Feishu Q&A Bot (Second Bot)
 
 You can run a second bot for chat-style Q&A while keeping signal push bot unchanged.
