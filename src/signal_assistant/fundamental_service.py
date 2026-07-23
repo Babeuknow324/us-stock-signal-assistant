@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -25,14 +26,25 @@ def _resolve_longbridge_bin() -> str:
     env_bin = os.getenv("LONGBRIDGE_CLI_PATH", "").strip()
     if env_bin:
         return env_bin
+    found = shutil.which("longbridge")
+    if found:
+        return found
     win_default = r"C:\Users\adrian.sun\AppData\Local\Programs\longbridge\longbridge.exe"
     if os.path.exists(win_default):
         return win_default
-    return "longbridge"
+    linux_default = "/usr/local/bin/longbridge"
+    if os.path.exists(linux_default):
+        return linux_default
+    return ""
 
 
 def _run_longbridge_json(args: list[str]) -> dict[str, Any]:
-    cmd = [_resolve_longbridge_bin(), *args, "--format", "json"]
+    bin_path = _resolve_longbridge_bin()
+    if not bin_path:
+        raise RuntimeError(
+            "Longbridge CLI not found. Set LONGBRIDGE_CLI_PATH or install longbridge binary in runtime image."
+        )
+    cmd = [bin_path, *args, "--format", "json"]
     proc = subprocess.run(cmd, capture_output=True, timeout=20, check=False)
     stdout = proc.stdout.decode("utf-8", errors="replace")
     stderr = proc.stderr.decode("utf-8", errors="replace")
