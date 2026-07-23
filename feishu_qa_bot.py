@@ -90,6 +90,8 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
     chat_last_symbol: dict[str, str] = {}
     processed_message_ids: dict[str, float] = {}
     dedupe_ttl_seconds: int = 600
+    last_reply_by_chat: dict[str, tuple[str, float]] = {}
+    reply_dedupe_seconds: int = 90
 
     @classmethod
     def _prune_processed_ids(cls, now_ts: float) -> None:
@@ -110,6 +112,19 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
         if message_id in cls.processed_message_ids:
             return True
         cls.processed_message_ids[message_id] = now_ts
+        return False
+
+    @classmethod
+    def _should_skip_duplicate_reply(cls, chat_id: str, reply_text: str) -> bool:
+        if not chat_id or not reply_text:
+            return False
+        now_ts = time.time()
+        previous = cls.last_reply_by_chat.get(chat_id)
+        if previous is not None:
+            prev_text, prev_ts = previous
+            if prev_text == reply_text and (now_ts - prev_ts) <= cls.reply_dedupe_seconds:
+                return True
+        cls.last_reply_by_chat[chat_id] = (reply_text, now_ts)
         return False
 
     def _send_json(self, status: int, body: dict) -> None:
@@ -169,7 +184,10 @@ class FeishuQAHandler(BaseHTTPRequestHandler):
                 self.chat_last_symbol[chat_id] = used_symbol
             if self.client is not None:
                 if handled:
-                    self.client.send_text_to_chat(chat_id, reply)
+                    if self._should_skip_duplicate_reply(chat_id, reply):
+                        print(f"Feishu duplicate reply skipped for chat: {chat_id}")
+                    else:
+                        self.client.send_text_to_chat(chat_id, reply)
                 elif self.debug_echo:
                     self.client.send_text_to_chat(
                         chat_id,
@@ -197,6 +215,7 @@ def main() -> None:
     # Fallback to generic PORT when FEISHU_QA_PORT is not provided.
     port = int(os.getenv("FEISHU_QA_PORT", os.getenv("PORT", "8091")))
     debug_echo = _parse_bool(os.getenv("FEISHU_QA_DEBUG_ECHO"), True)
+    reply_dedupe_seconds = int(os.getenv("FEISHU_QA_REPLY_DEDUPE_SECONDS", "90"))
 
     if not app_id or not app_secret:
         raise RuntimeError("Missing FEISHU_QA_APP_ID or FEISHU_QA_APP_SECRET in .env")
@@ -204,6 +223,7 @@ def main() -> None:
     FeishuQAHandler.client = FeishuClient(app_id=app_id, app_secret=app_secret)
     FeishuQAHandler.verify_token = verify_token
     FeishuQAHandler.debug_echo = debug_echo
+    FeishuQAHandler.reply_dedupe_seconds = max(10, reply_dedupe_seconds)
     server = HTTPServer((host, port), FeishuQAHandler)
     print(f"Feishu QA bot listening on http://{host}:{port}/feishu/events")
     server.serve_forever()
