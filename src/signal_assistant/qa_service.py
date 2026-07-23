@@ -9,9 +9,11 @@ from .fundamental_service import fetch_fundamental_snapshot
 from .llm_analyzer import LLMAnalyzer
 from .labels import label_evidence_strength, label_risk_level, label_signal_type
 from .longbridge_client import LongbridgeMarketDataClient
-from .option_service import fetch_option_snapshot
+from .option_service import build_single_leg_plan, fetch_option_snapshot
 from .review_bot import format_review_reply
 from .signal_engine import SignalEngine, SignalResult
+
+_LAST_OPTION_PREF_BY_SYMBOL: dict[str, str] = {}
 
 
 @dataclass(frozen=True)
@@ -310,34 +312,75 @@ def format_option_reply(
         )
 
     pref = (preference_text or "").lower()
-    prefer_single_leg = any(k in pref for k in {"单腿", "裸买", "single leg", "single-leg"})
+    prefer_single_leg = any(k in pref for k in {"单腿", "裸买", "single leg", "single-leg", "one leg"})
     prefer_bull = any(k in pref for k in {"做多", "偏多", "看涨", "bull", "call", "单腿多"})
     prefer_bear = any(k in pref for k in {"做空", "偏空", "看跌", "bear", "put", "单腿空"})
+    if not prefer_bull and not prefer_bear:
+        if snap.signal and snap.signal.signal_type in {"breakout_candidate", "long_setup"}:
+            prefer_bull = True
+        elif snap.signal and snap.signal.signal_type == "exit_warning":
+            prefer_bear = True
+
+    risk_style = "balanced"
+    if any(k in pref for k in {"稳健", "保守", "conservative"}):
+        risk_style = "conservative"
+    elif any(k in pref for k in {"激进", "aggressive"}):
+        risk_style = "aggressive"
+
+    if prefer_single_leg:
+        side = "CALL" if prefer_bull or (not prefer_bear) else "PUT"
+        plan = build_single_leg_plan(
+            symbol=snap.symbol,
+            spot_price=snap.price,
+            option_snapshot=option_snap,
+            prefer_side=side,
+            horizon_hint=horizon_hint,
+            risk_style=risk_style,
+        )
+        if plan is None:
+            return f"{snap.symbol} 现在还凑不齐单腿方案数据，稍后再试。", snap.symbol
+        iv_text = (
+            f"Call IV {plan.contract.call_iv:.3f} / Put IV {plan.contract.put_iv:.3f}"
+            if plan.contract.call_iv is not None and plan.contract.put_iv is not None
+            else "IV 暂缺"
+        )
+        expiry_preview = ", ".join(option_snap.expiry_dates[:4]) if option_snap.expiry_dates else "暂无到期日"
+        direction = plan.direction
+        flow_note = "暂未拿到 Put/Call 量比。"
+        if option_snap.pcr is not None:
+            flow_note = (
+                f"Put/Call 量比约 {option_snap.pcr:.2f}（>1偏防守，<1偏风险偏好）。"
+            )
+        dte_note = "默认选 7-14DTE。"
+        if horizon_hint == "next_week":
+            dte_note = "你说下周到期，已优先 next week 档位。"
+        elif horizon_hint == "swing":
+            dte_note = "你偏中线，已优先 14-35DTE 档位。"
+        reply = (
+            f"{snap.symbol} 单腿专用卡\n"
+            f"- 方向: {direction}\n"
+            f"- 建议合约: {plan.contract.side} | 到期 {plan.contract.expiry_date} | 行权价 {plan.contract.strike:.2f}\n"
+            f"- OCC参考: {plan.contract.contract_symbol}\n"
+            f"- 现价: {snap.price:.2f}\n"
+            f"- IV参考: {iv_text}\n"
+            f"- 期权量能: Call {option_snap.call_volume or 0} / Put {option_snap.put_volume or 0}\n"
+            f"- 情绪: {flow_note}\n"
+            f"- 到期选择: {dte_note}\n"
+            f"- 风控引擎: 止损 {plan.risk.stop_loss_pct:.0f}% | 止盈 {plan.risk.take_profit_pct:.0f}% "
+            f"| 最长持有 {plan.risk.max_hold_days} 天 | 单笔风险预算 <= 账户 {plan.risk.position_risk_pct:.1f}%\n"
+            f"- 备选到期: {expiry_preview}"
+        )
+        return reply, snap.symbol
 
     if prefer_bull:
-        direction = "偏多（按你的偏好）"
-        if prefer_single_leg:
-            structure = "按你偏好：单腿买入 call（优先 ATM 或轻度 ITM）"
-        else:
-            structure = "优先考虑 call debit spread（比裸买 call 更稳）"
-    elif prefer_bear:
-        direction = "偏空（按你的偏好）"
-        if prefer_single_leg:
-            structure = "按你偏好：单腿买入 put（优先 ATM 或轻度 ITM）"
-        else:
-            structure = "可考虑 put debit spread，避免裸买 put 的时间损耗压力"
-    elif snap.signal and snap.signal.signal_type in {"breakout_candidate", "long_setup"}:
         direction = "偏多"
-        structure = "优先考虑 call debit spread（比裸买 call 更稳）"
-    elif snap.signal and snap.signal.signal_type == "exit_warning":
-        direction = "偏防守/偏空"
-        structure = "可考虑 put debit spread，避免裸买 put 的时间损耗压力"
+        structure = "call debit spread（若你改成单腿，我会直接给单腿CALL）"
+    elif prefer_bear:
+        direction = "偏空"
+        structure = "put debit spread（若你改成单腿，我会直接给单腿PUT）"
     else:
         direction = "中性观察"
-        if prefer_single_leg:
-            structure = "按你偏好先用单腿，但建议等方向明确后再开仓"
-        else:
-            structure = "先等方向明确，再选期权结构"
+        structure = "先等方向明确，再选结构"
 
     if option_snap.pcr is not None:
         if option_snap.pcr >= 1.2:
@@ -352,6 +395,8 @@ def format_option_reply(
     dte_note = "建议先看 7-14 天到期，平衡胜率与时间损耗。"
     if horizon_hint == "next_week":
         dte_note = "你提到下周到期，建议优先 next week 的 ATM 附近价差单，控制 Theta 风险。"
+    elif horizon_hint == "swing":
+        dte_note = "你偏中线，建议优先 14-35DTE，降低时间价值衰减压力。"
 
     expiry_preview = ", ".join(option_snap.expiry_dates[:4]) if option_snap.expiry_dates else "暂无到期日数据"
     atm_iv = "N/A"
@@ -383,6 +428,7 @@ def _help_text() -> str:
         "- MU 基本面怎么样？\n"
         "- NVDA 基本面和技术面一起看下\n"
         "- SPY 期权怎么做？\n"
+        "- 我只做单腿多，给我具体合约\n"
         "- 那如果改成下周到期呢？"
     )
 
@@ -459,6 +505,25 @@ def _infer_intent(raw: str) -> Optional[str]:
     text = raw.lower()
     if any(k in text for k in {"帮助", "help", "/help", "指令"}):
         return "help"
+    if any(
+        k in text
+        for k in {
+            "期权",
+            "option",
+            "call",
+            "put",
+            "iv",
+            "pcr",
+            "到期",
+            "行权价",
+            "delta",
+            "gamma",
+            "单腿",
+            "看涨",
+            "看跌",
+        }
+    ):
+        return "option"
     if any(k in text for k in {"价格", "报价", "现价", "最新价", "price", "quote"}):
         return "price"
     if any(k in text for k in {"买点", "买吗", "能买吗", "能不能买", "可不可以买", "买入", "开仓", "加仓", "做多"}):
@@ -481,25 +546,6 @@ def _infer_intent(raw: str) -> Optional[str]:
         return "review"
     if any(k in text for k in {"风控", "风险", "止损", "失效"}):
         return "risk"
-    if any(
-        k in text
-        for k in {
-            "期权",
-            "option",
-            "call",
-            "put",
-            "iv",
-            "pcr",
-            "到期",
-            "行权价",
-            "delta",
-            "gamma",
-            "单腿",
-            "看涨",
-            "看跌",
-        }
-    ):
-        return "option"
     if any(k in text for k in {"解释", "逻辑", "为什么", "分析"}):
         return "explain"
     if any(
@@ -530,6 +576,41 @@ def _needs_combo_reply(raw: str) -> bool:
     has_fund = any(k in text for k in {"基本面", "财报", "估值", "机构评级", "目标价", "roe", "eps"})
     has_tech = any(k in text for k in {"技术面", "走势", "趋势", "形态", "均线", "支撑", "压力位", "信号"})
     return has_fund and has_tech
+
+
+def _looks_like_option_followup(raw: str) -> bool:
+    text = raw.lower()
+    followup_markers = {"那", "那如果", "改成", "还是", "继续", "换成", "到期"}
+    option_markers = {"单腿", "下周", "next week", "dte", "到期", "看涨", "看跌", "call", "put"}
+    return any(k in text for k in followup_markers) and any(k in text for k in option_markers)
+
+
+def _parse_option_horizon(raw: str) -> Optional[str]:
+    text = raw.lower()
+    if any(k in text for k in {"下周", "next week", "nextweek"}):
+        return "next_week"
+    if any(k in text for k in {"中线", "两周", "3周", "4周", "swing", "14天", "30天"}):
+        return "swing"
+    return None
+
+
+def _has_explicit_option_style(raw: str) -> bool:
+    text = raw.lower()
+    return any(
+        k in text
+        for k in {
+            "单腿",
+            "裸买",
+            "价差",
+            "spread",
+            "call",
+            "put",
+            "看涨",
+            "看跌",
+            "做多",
+            "做空",
+        }
+    )
 
 
 def _smalltalk_reply(raw: str) -> Optional[str]:
@@ -570,6 +651,19 @@ def route_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, s
     if intent == "help":
         return True, _help_text(), None
     if intent is None:
+        if _looks_like_option_followup(raw) and default_symbol:
+            normalized_symbol = normalize_user_symbol(default_symbol)
+            fallback_pref = _LAST_OPTION_PREF_BY_SYMBOL.get(normalized_symbol, "")
+            pref_text = raw if _has_explicit_option_style(raw) else (f"{fallback_pref} {raw}".strip() or raw)
+            reply, used_symbol = format_option_reply(
+                default_symbol,
+                default_symbol=default_symbol,
+                horizon_hint=_parse_option_horizon(raw),
+                preference_text=pref_text,
+            )
+            if used_symbol:
+                _LAST_OPTION_PREF_BY_SYMBOL[used_symbol] = pref_text
+            return True, reply, used_symbol
         talk = _smalltalk_reply(raw)
         if talk:
             return True, talk, default_symbol
@@ -600,13 +694,18 @@ def route_text(text: str, default_symbol: Optional[str] = None) -> Tuple[bool, s
         )
 
     if intent == "option":
-        horizon_hint = "next_week" if any(k in raw for k in {"下周", "next week", "nextweek"}) else None
+        horizon_hint = _parse_option_horizon(raw)
+        normalized_symbol = normalize_user_symbol(symbol)
+        fallback_pref = _LAST_OPTION_PREF_BY_SYMBOL.get(normalized_symbol, "")
+        pref_text = raw if _has_explicit_option_style(raw) else (f"{fallback_pref} {raw}".strip() or raw)
         reply, used_symbol = format_option_reply(
             symbol,
             default_symbol=default_symbol,
             horizon_hint=horizon_hint,
-            preference_text=raw,
+            preference_text=pref_text,
         )
+        if used_symbol:
+            _LAST_OPTION_PREF_BY_SYMBOL[used_symbol] = pref_text
         return True, reply, used_symbol or normalize_user_symbol(symbol)
 
     handled, reply, used_symbol = _dispatch_command(intent, symbol)
